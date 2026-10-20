@@ -1,0 +1,939 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Status · noderouter</title>
+<meta name="description" content="Public uptime and per-provider status for the noderouter router, refreshed every 30 seconds.">
+<meta property="og:title" content="Status · noderouter">
+<meta property="og:description" content="Public uptime and per-provider status for the noderouter router.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="/img/og-image.png">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/favicon/favicon.svg" type="image/svg+xml">
+<link rel="icon" type="image/png" sizes="48x48" href="/favicon/favicon-48x48.png" media="(prefers-color-scheme: light)">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon/favicon-32x32.png" media="(prefers-color-scheme: light)">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon/favicon-16x16.png" media="(prefers-color-scheme: light)">
+<link rel="icon" type="image/png" sizes="48x48" href="/favicon/favicon-dark-48x48.png" media="(prefers-color-scheme: dark)">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon/favicon-dark-32x32.png" media="(prefers-color-scheme: dark)">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon/favicon-dark-16x16.png" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/favicon/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/favicon/apple-touch-icon.png">
+<link rel="stylesheet" href="/css/fonts.css">
+<script>
+try {
+  var saved = null;
+  try { saved = localStorage.getItem('noderouter:theme'); } catch (e) {}
+  var theme = saved || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  document.documentElement.dataset.theme = theme;
+} catch (e) {}
+</script>
+<link rel="stylesheet" href="/css/site.css">
+<style>
+  /* Status colours. Fills are measured against the canvas and against the empty
+     track behind them (3:1, non-text); the ink pair labels them (4.5:1, text).
+     Two of these are darkened from the obvious pick on purpose: the amber is
+     the stock --warning dropped until it holds 3:1 on white, and the green is
+     the stock #16a34a dropped until it is readable against the empty track it
+     sits in, not just against the page. */
+  :root {
+    --ok: #15803d; --ok-ink: #15803d;
+    --degraded: #b45309; --degraded-ink: #92400e;
+    --down: #dc2626; --down-ink: #b91c1c;
+  }
+  [data-theme="dark"] {
+    --ok: #22c55e; --ok-ink: #4ade80;
+    --degraded: #f59e0b; --degraded-ink: #fbbf24;
+    --down: #ef4444; --down-ink: #fca5a5;
+  }
+
+  /* The state sentence: one line of prose about right now, in the hero. It
+     replaces a stat card whose number was a status badge saying the same
+     thing. */
+  .state-line {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    flex-wrap: wrap; font-size: 15px; line-height: 1.5; color: var(--body);
+  }
+  .state-line strong { color: var(--ink); font-weight: 600; }
+  .state-dot { width: 8px; height: 8px; border-radius: 9999px; background: var(--ok); flex: none; }
+  .state-line.degraded .state-dot { background: var(--degraded); }
+  .state-line.down .state-dot, .state-line.error .state-dot { background: var(--down); }
+  .state-line.loading .state-dot, .state-line.none .state-dot { background: var(--hairline-strong); }
+
+  /* Overview: three numbers the feed really carries, no card per number. */
+  .ov {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    border: 1px solid var(--hairline); border-radius: 12px; overflow: hidden;
+  }
+  .ov-cell { padding: 22px 24px; border-right: 1px solid var(--hairline); min-width: 0; }
+  .ov-cell:last-child { border-right: 0; }
+  .ov-num {
+    display: block; font-family: "PlantinNow", Georgia, serif; font-weight: 600;
+    font-size: 32px; line-height: 1.15; letter-spacing: -.02em; color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+  .ov-label { display: block; margin-top: 4px; font-size: 13px; font-weight: 500; color: var(--muted); }
+  .meta-note { font-size: 13px; color: var(--muted); margin-top: 16px; line-height: 1.6; }
+  .meta-note strong { color: var(--ink); font-weight: 600; }
+
+  /* The week as one track: seven blocks, one per day, each a button. A block
+     is filled whole in its band's colour - green, amber, red - rather than
+     part-filled by a percentage, because the percentage is already printed
+     under it and a bar chart would say the same thing twice. */
+  .track { display: flex; align-items: stretch; gap: 2px; }
+  .seg {
+    flex: 1 1 0; min-width: 0; padding: 0;
+    display: flex; flex-direction: column; gap: 7px;
+    background: none; border: 0; border-radius: 6px; text-align: center;
+  }
+  .seg-bar { display: block; height: 44px; border-radius: 4px; background: var(--ok); }
+  .seg.degraded .seg-bar { background: var(--degraded); }
+  .seg.down .seg-bar { background: var(--down); }
+  /* A day with no requests is a state, not an absence of paint: the dashed
+     border holds 3:1 in both themes (--quiet), which --hairline does not. */
+  .seg.none .seg-bar { background: var(--canvas); border: 1px dashed var(--quiet); }
+  .seg-cap { display: flex; flex-direction: column; gap: 1px; align-items: center; }
+  .seg-day, .seg-pct { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .seg-day { font-size: 12px; font-weight: 500; color: var(--muted); }
+  .seg-pct { font-size: 13px; font-weight: 500; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .seg-pct.none { color: var(--muted); }
+  /* The weekday is the first thing to go when a segment gets narrow: the day
+     number and the percentage are what the segment is for. */
+  @media (max-width: 639px) { .seg-dow { display: none; } }
+  .seg:hover .seg-day { color: var(--ink); }
+  .seg:hover .seg-bar { box-shadow: inset 0 0 0 2px var(--ink); }
+  .seg[aria-expanded="true"] .seg-day { color: var(--ink); font-weight: 600; }
+  .seg[aria-expanded="true"] .seg-cap { box-shadow: inset 0 -2px 0 var(--ink); }
+
+  .legend {
+    display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+    margin-top: 14px; font-size: 13px; color: var(--muted);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .legend i { width: 10px; height: 10px; border-radius: 3px; flex: none; background: var(--ok); }
+  .legend .lg-degraded i { background: var(--degraded); }
+  .legend .lg-down i { background: var(--down); }
+  .legend .lg-none i { background: var(--canvas); border: 1px dashed var(--quiet); }
+
+  .hint { margin-top: 8px; font-size: 13px; color: var(--muted); }
+
+  /* A day, in the site's dialog: its 24 hours as a second line, one segment
+     per hour, clicked the way the week line is. The day's totals ride in the
+     dialog head, and the hour under the cursor or the selection is spelled
+     out in words underneath - the line never has to be read by colour. */
+  .modal-overlay:not(.open) { visibility: hidden; }
+  .day-head { min-width: 0; }
+  .day-head h3 {
+    font-family: "PlantinNow", Georgia, serif; font-weight: 600;
+    font-size: 19px; line-height: 1.3; letter-spacing: -.01em; color: var(--ink);
+  }
+  .day-sub { margin-top: 3px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .hour-line { display: flex; align-items: stretch; gap: 1px; }
+  .hseg { flex: 1 1 0; min-width: 0; padding: 0; background: none; border: 0; border-radius: 3px; }
+  .hseg-bar { display: block; height: 44px; border-radius: 3px; background: var(--ok); }
+  .hseg.degraded .hseg-bar { background: var(--degraded); }
+  .hseg.down .hseg-bar { background: var(--down); }
+  .hseg.none .hseg-bar { background: var(--canvas); border: 1px dashed var(--quiet); }
+  .hseg:hover .hseg-bar { box-shadow: inset 0 0 0 2px var(--ink); }
+  .hseg[aria-pressed="true"] .hseg-bar { box-shadow: inset 0 0 0 2px var(--ink); }
+  .hour-ticks { display: flex; gap: 1px; margin-top: 6px; }
+  .hour-ticks span {
+    flex: 1 1 0; min-width: 0; text-align: center;
+    font-family: "Departure Mono", ui-monospace, monospace; font-size: 10px; color: var(--muted);
+  }
+  .hour-readout { min-height: 24px; font-size: 14px; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .hour-note { font-size: 12px; line-height: 1.6; color: var(--muted); }
+
+  .stack { display: flex; flex-direction: column; gap: 8px; }
+  .acc {
+    border: 1px solid var(--hairline); border-radius: 12px;
+    background: var(--canvas); overflow: hidden;
+  }
+  .acc > summary {
+    list-style: none; cursor: pointer; padding: 11px 14px;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  }
+  .acc > summary::-webkit-details-marker { display: none; }
+  .acc[open] > summary { border-bottom: 1px solid var(--hairline); }
+  .acc-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .acc-name { color: var(--ink); font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+  .acc-sub { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  .acc-right { display: inline-flex; align-items: center; gap: 10px; flex: none; }
+  .acc-pct { font-size: 13px; font-weight: 500; color: var(--ok-ink); font-variant-numeric: tabular-nums; }
+  .acc-pct.degraded { color: var(--degraded-ink); }
+  .acc-pct.down { color: var(--down-ink); }
+  .acc-pct.none { color: var(--muted); }
+  .chev { display: grid; place-items: center; width: 16px; height: 16px; color: var(--muted); transition: transform .15s ease; }
+  .chev svg { width: 14px; height: 14px; }
+  .acc[open] .chev { transform: rotate(180deg); }
+  .acc-body { padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 8px; }
+
+  /* The models a provider served: name, then that model's day as a line of 24
+     hour blocks, one per hour, and the day's numbers. Clicking a block opens
+     that hour in the dialog - the same shape as the week line, one level down,
+     rather than a second week inside each row. */
+  .rows { display: flex; flex-direction: column; gap: 1px; }
+  .mrow {
+    display: flex; align-items: center; gap: 14px;
+    padding: 5px 8px; margin: 0 -8px; border-radius: 8px;
+  }
+  .mrow:hover { background: var(--surface); }
+  .mrow-name {
+    flex: 1 1 auto; min-width: 0; padding: 0; text-align: left;
+    font-size: 14px; color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .mrow-name:hover { text-decoration: underline; text-underline-offset: 2px; }
+  .mrow-line { flex: 1 1 auto; min-width: 0; display: flex; gap: 1px; }
+  .mseg { flex: 1 1 0; min-width: 5px; padding: 0; background: none; border: 0; border-radius: 2px; }
+  .mseg-bar { display: block; height: 24px; border-radius: 2px; background: var(--ok); }
+  .mseg.degraded .mseg-bar { background: var(--degraded); }
+  .mseg.down .mseg-bar { background: var(--down); }
+  .mseg.none .mseg-bar { background: var(--canvas); border: 1px dashed var(--quiet); }
+  .mseg:hover .mseg-bar { box-shadow: inset 0 0 0 2px var(--ink); }
+  .mrow-meta {
+    flex: none; width: 148px; text-align: right;
+    font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
+  }
+
+  .empty { font-size: 13px; line-height: 1.6; color: var(--muted); max-width: 62ch; }
+  .error-actions { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
+
+  /* This page reads as one board rather than a sequence of statements, so its
+     sections sit closer together than the marketing pages' 96px rhythm: a week
+     and the tables explaining it should be readable without scrolling past
+     whitespace. */
+  .hero { padding: 64px 0 36px; }
+  .section { padding: 40px 0 64px; }
+  .ov-cell { padding: 18px 20px; }
+  .meta-note { margin-top: 12px; }
+
+  @media (max-width: 1023px) {
+    .ov { grid-template-columns: repeat(3, 1fr); }
+    .ov-cell { padding: 16px 14px; }
+    .ov-num { font-size: 27px; }
+    .section { padding: 36px 0 56px; }
+  }
+  @media (max-width: 639px) {
+    .section-head { flex-direction: column; align-items: center; text-align: center; gap: 4px; }
+    .state-line { font-size: 14px; }
+    /* The board reads as one thing on a phone, so the numbers and the key
+       under the week line centre with it instead of stacking flush left. */
+    .ov-cell { padding: 14px 12px; text-align: center; }
+    .ov-num { font-size: 22px; }
+    .ov-label { font-size: 12px; }
+    .hero { padding: 40px 0 28px; }
+    .section { padding: 28px 0 48px; }
+    .track { gap: 1px; }
+    .seg-day, .seg-pct { font-size: 11px; }
+    .seg-bar { height: 38px; }
+    .legend { justify-content: center; gap: 12px 16px; font-size: 12px; }
+    .hint { text-align: center; }
+    .mrow { flex-wrap: wrap; gap: 8px; }
+    .mrow-name { flex: 1 1 100%; }
+    .mrow-line { flex: 1 1 100%; order: 2; }
+    .mrow-meta { width: auto; margin-left: auto; order: 3; }
+  }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="container nav-inner">
+    <button class="nav-burger" type="button" data-nav-toggle aria-label="Open menu" aria-expanded="false" aria-controls="nav-menu">
+      <svg class="nav-burger-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      <svg class="nav-burger-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <a class="brand" href="/" aria-label="noderouter home">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="-82.77 -82.77 165.54 165.54"><g fill="currentColor"><rect x="-40" y="-40" width="80" height="80" rx="4" ry="4" transform="rotate(45)"/><rect x="-40" y="-12" width="80" height="24" rx="4" ry="4" transform="translate(46, 46) rotate(135)"/><rect x="-40" y="-12" width="80" height="24" rx="4" ry="4" transform="translate(46, -46) rotate(-135)"/><rect x="-40" y="-12" width="80" height="24" rx="4" ry="4" transform="translate(-46, -46) rotate(-45)"/><rect x="-40" y="-12" width="80" height="24" rx="4" ry="4" transform="translate(-46, 46) rotate(45)"/></g></svg>
+      </span>
+      <span class="font-display">noderouter</span>
+    </a>
+    <nav class="nav-links" id="nav-menu" aria-label="Primary">
+      <a href="/models">Models</a>
+      <a href="/docs/configuration.md">Docs</a>
+      <a href="/status" class="active">Status</a>
+      <a href="/v1/models?format=json">API</a>
+    </nav>
+    <div class="nav-right">
+      <span class="live off" id="live"><span class="live-dot"></span><span id="live-label">connecting</span></span>
+      <div class="theme-toggle" role="group" aria-label="Theme">
+        <button data-theme-btn="light" aria-label="Light theme" title="Light">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button data-theme-btn="dark" aria-label="Dark theme" title="Dark">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>
+        </button>
+        <button data-theme-btn="auto" aria-label="System theme" title="System">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- Taps meant for the page under an open drawer land here instead. -->
+<div class="nav-scrim" aria-hidden="true"></div>
+
+<main>
+  <section class="hero container">
+    <h1 class="font-display">Status,<br><span class="gradient-text">at a glance.</span></h1>
+    <p class="sub">Uptime and traffic for the noderouter router, refreshed every 30 seconds.</p>
+    <p class="state-line loading" id="state-line">
+      <span class="state-dot" id="state-dot" aria-hidden="true"></span>
+      <span id="state-text">Checking the router&hellip;</span>
+    </p>
+  </section>
+
+  <section class="container" id="feed-error" hidden>
+    <div class="state error">
+      <h3>Status didn&rsquo;t load</h3>
+      <p><span class="mono" id="error-detail">the feed did not answer</span></p>
+      <p>This page retries every 30 seconds on its own. If it stays down, check the router&rsquo;s logs.</p>
+      <div class="error-actions">
+        <button class="btn btn-primary" id="retry">Try again</button>
+        <a class="btn btn-secondary" href="/v1/status?format=json">Read the feed</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="section container" id="overview">
+    <div class="section-head">
+      <h2 class="font-display">Overview</h2>
+      <span class="count" id="generated">loading&hellip;</span>
+    </div>
+    <div class="ov">
+      <div class="ov-cell">
+        <span class="ov-num" id="uptime">&ndash;&ndash;</span>
+        <span class="ov-label">uptime, last 7 days</span>
+      </div>
+      <div class="ov-cell">
+        <span class="ov-num" id="total">&ndash;&ndash;</span>
+        <span class="ov-label">requests routed</span>
+      </div>
+      <div class="ov-cell">
+        <span class="ov-num" id="failed">&ndash;&ndash;</span>
+        <span class="ov-label">failed</span>
+      </div>
+    </div>
+    <p class="meta-note">
+      Failed counts requests the router could not finish: an upstream error, or one that ran out
+      of retries. Covers the last <strong id="window">7 days</strong>, grouped by hour.
+    </p>
+  </section>
+
+  <section class="section container" id="week">
+    <div class="section-head">
+      <h2 class="font-display">Last 7 days</h2>
+      <span class="count" id="week-count">day by day</span>
+    </div>
+    <div class="track" id="track" role="group" aria-label="Uptime by day, last 7 days"></div>
+    <p class="empty" id="week-state">Loading the last 7 days&hellip;</p>
+    <div class="legend" id="legend" hidden>
+      <span class="lg-ok"><i aria-hidden="true"></i>operational, 99% and up</span>
+      <span class="lg-degraded"><i aria-hidden="true"></i>degraded, 95&ndash;99%</span>
+      <span class="lg-down"><i aria-hidden="true"></i>down, under 95%</span>
+      <span class="lg-none"><i aria-hidden="true"></i>no requests at all</span>
+    </div>
+    <p class="hint" id="week-hint" hidden>Click a day to open its hours.</p>
+  </section>
+
+  <section class="section container" id="breakdown">
+    <div class="section-head">
+      <h2 class="font-display">Providers</h2>
+      <span class="count" id="provider-count">loading&hellip;</span>
+    </div>
+    <div id="providers" class="stack"><p class="empty">Loading providers&hellip;</p></div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer-inner">
+      <div>
+        <a class="brand" href="/">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="-82.77 -82.77 165.54 165.54"><g fill="currentColor"><rect x="-40" y="-40" width="80" height="80" rx="4" ry="4" transform="rotate(45)"/><rect x="-40" y="-12" width="80" height="24" rx="4" ry="4" transform="translate(46, 46) rotate(135)"/><rect x="-40" y="-12" width="80" height="24" rx="4" ry="4" transform="translate(46, -46) rotate(-135)"/><rect x="-40" y="-12" width="80" height="24" rx="4" ry="4" transform="translate(-46, -46) rotate(-45)"/><rect x="-40" y="-12" width="80" height="24" rx="4" ry="4" transform="translate(-46, 46) rotate(45)"/></g></svg>
+          </span>
+          <span class="font-display">noderouter</span>
+        </a>
+        <p class="footer-note">An OpenAI-compatible router that walks LLM traffic through rotating free proxies, with retries across the pool on every failed hop.</p>
+      </div>
+      <div class="footer-links">
+        <div>
+          <h4>Router</h4>
+          <ul>
+            <li><a href="/models">Models</a></li>
+            <li><a href="/v1/models?format=json">/v1/models</a></li>
+            <li><a href="/status">Status</a></li>
+            <li><a href="/noderouter/routes">Routes</a></li>
+          </ul>
+        </div>
+        <div>
+          <h4>API</h4>
+          <ul>
+            <li><a href="/v1/status?format=json">/v1/status</a></li>
+            <li><a href="/docs/configuration.md">Configuration</a></li>
+            <li><a href="/docs/proxies.md">Proxies</a></li>
+            <li><a href="/docs/operations.md">Operations</a></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <p class="footer-disclaimer">noderouter is currently closed source. Please note that some providers may log your conversations. Provided by <a href="https://tinypixel.my.id" rel="noopener" target="_blank">TinyPixel</a>.</p>
+    <div class="footer-base">
+      <span>noderouter</span>
+      <span id="footer-updated">waiting for the first reading</span>
+    </div>
+  </div>
+</footer>
+
+<!-- =================================================================== modal -->
+<div class="modal-overlay" id="day-modal" role="dialog" aria-modal="true" aria-labelledby="dd-title" aria-hidden="true">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="day-head">
+        <h3 id="dd-title">&nbsp;</h3>
+        <p class="day-sub" id="dd-sub">&nbsp;</p>
+      </div>
+      <button class="modal-close" id="dd-close" aria-label="Close the hourly log">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div>
+        <div class="hour-line" id="dd-hours" role="group" aria-label="Every hour of this day"></div>
+        <div class="hour-ticks" id="dd-ticks" aria-hidden="true"></div>
+      </div>
+      <p class="hour-readout" id="dd-readout">&nbsp;</p>
+      <p class="hour-note" id="dd-note"></p>
+    </div>
+  </div>
+</div>
+
+<noscript>
+  <div class="noscript-box">
+    <h2>JavaScript is off</h2>
+    <p>
+      The status page is fetched live from <code>/v1/status</code>. Read it directly:
+      <a href="/v1/status?format=json">/v1/status</a>
+    </p>
+  </div>
+</noscript>
+
+<script src="/js/nav.js"></script>
+<script src="/js/theme.js"></script>
+<script>
+/* Status page.
+ *
+ * One feed, read two ways: the week as a single line of seven day blocks, and
+ * every provider with the models it served, each model carrying its own week as
+ * a second line of the same shape. Clicking a day block - on either line -
+ * opens that day's hours in a dialog, one block per hour, and clicking an hour
+ * writes it out in words. No framework, no build step.
+ *
+ * Everything is rendered from /v1/status on a 30 second timer, so what is open
+ * - a dialog, an accordion - is remembered in `state` and restored on the next
+ * render rather than snapping shut under the reader. */
+(function () {
+  'use strict';
+
+  var CHEV = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
+
+  var state = {
+    days: [],      // day rows from the feed, oldest first
+    hours: {},     // "YYYY-MM-DD" -> 24 hourly rows (or null for an hour with no traffic)
+    providers: [], // the provider rows as last rendered, so the dialog can look one up
+    // What the dialog is showing: a day of the whole router, or one model's day
+    // through one provider. null when it is closed.
+    dialog: null,  // { kind: 'day', date } | { kind: 'model', date, provider, model }
+    hour: 0,       // the hour selected inside that dialog
+    open: {}       // accordion key -> true, so a refresh does not close them
+  };
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  /* --------------------------------------------------------------- helpers */
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function num(v) { return (Number(v) || 0).toLocaleString(); }
+  function pct(v, digits) {
+    var n = Number(v) || 0;
+    if (n >= 100) return '100%';
+    return n.toFixed(digits) + '%';
+  }
+  // The same bands the router labels the feed with, so a day and the header
+  // sentence never disagree about what "degraded" means.
+  function band(percent, total) {
+    if (!total) return 'none';
+    if (percent >= 99) return 'ok';
+    if (percent >= 95) return 'degraded';
+    return 'down';
+  }
+  function utcDay(date) { return new Date(date + 'T00:00:00Z'); }
+  function shortWeekday(date) {
+    return utcDay(date).toLocaleDateString(undefined, { weekday: 'short', timeZone: 'UTC' });
+  }
+  function dayOfMonth(date) { return String(utcDay(date).getUTCDate()); }
+  function longDay(date) {
+    return utcDay(date).toLocaleDateString(undefined, {
+      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC'
+    });
+  }
+  function clock(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ' UTC';
+  }
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function indexHours(rows) {
+    var byDay = {};
+    (rows || []).forEach(function (h) {
+      var at = typeof h.timestamp === 'number' ? new Date(h.timestamp * 1000) : new Date(h.hour);
+      if (isNaN(at.getTime())) return;
+      var key = at.toISOString().slice(0, 10);
+      if (!byDay[key]) {
+        byDay[key] = [];
+        for (var i = 0; i < 24; i++) byDay[key].push(null);
+      }
+      byDay[key][at.getUTCHours()] = h;
+    });
+    return byDay;
+  }
+
+  /* ---------------------------------------------------------------- render */
+  function render(d) {
+    state.days = Array.isArray(d.days) ? d.days : [];
+    state.hours = indexHours(d.hours);
+    state.providers = Array.isArray(d.providerStats) ? d.providerStats : [];
+    renderStateLine(d);
+    renderOverview(d);
+    renderWeek();
+    renderProviders(state.providers);
+  }
+
+  function dayByDate(date) {
+    for (var i = 0; i < state.days.length; i++) {
+      if (state.days[i].date === date) return state.days[i];
+    }
+    return null;
+  }
+  function hoursOf(date) { return state.hours[date] || []; }
+  function isOpenDay(date) {
+    var d = state.dialog;
+    return !!d && d.kind === 'day' && d.date === date;
+  }
+  function providerByName(name) {
+    for (var i = 0; i < state.providers.length; i++) {
+      if (state.providers[i].name === name) return state.providers[i];
+    }
+    return null;
+  }
+  // The provider row for a model dialog, with the model's entry and the day in
+  // question pulled out of it. null once the feed stops carrying them.
+  function modelContext() {
+    var d = state.dialog;
+    if (!d || d.kind !== 'model') return null;
+    var p = providerByName(d.provider);
+    if (!p) return null;
+    var models = Array.isArray(p.modelStats) ? p.modelStats : [];
+    var entry = null;
+    for (var i = 0; i < models.length; i++) {
+      if (models[i].name === d.model) entry = models[i];
+    }
+    if (!entry) return null;
+    var days = Array.isArray(entry.days) ? entry.days : [];
+    var day = null;
+    for (var j = 0; j < days.length; j++) {
+      if (days[j].date === d.date) day = days[j];
+    }
+    return { provider: p, entry: entry, day: day };
+  }
+  // The 24 hourly rows behind whatever the dialog is showing.
+  function dialogHours() {
+    var d = state.dialog;
+    if (!d) return [];
+    if (d.kind === 'model') {
+      var ctx = modelContext();
+      if (!ctx) return [];
+      return indexHours(ctx.entry.hours)[d.date] || [];
+    }
+    return hoursOf(d.date);
+  }
+
+  // The hour a day opens on: the last one that actually handled traffic, so
+  // the dialog does not open on an empty hour at 23:00.
+  function lastHourWithTraffic(hours) {
+    for (var h = 23; h >= 0; h--) {
+      if (hours[h]) return h;
+    }
+    return 0;
+  }
+  function hourText(h, row) {
+    var label = pad(h) + ':00 UTC';
+    if (!row) return label + ' \u00b7 no requests';
+    return label + ' \u00b7 ' + pct(row.uptimePercent, 1) + ' uptime \u00b7 ' + num(row.total) +
+      (Number(row.total) === 1 ? ' request' : ' requests');
+  }
+
+  // One sentence about right now, plus the dot that marks the same state.
+  function renderStateLine(d) {
+    var line = $('state-line');
+    var total = Number(d.total || 0);
+    var percent = Number(d.uptimePercent || 0);
+    var status = String(d.status || 'operational').toLowerCase();
+    var word = status === 'operational' ? 'All systems operational'
+      : status === 'degraded' ? 'Degraded performance'
+        : status === 'down' ? 'Service disruption'
+          : 'All systems operational';
+    var detail = total
+      ? pct(percent, 2) + ' of ' + num(total) + ' requests in the window succeeded.'
+      : 'No requests recorded yet, so there is nothing to report.';
+    line.className = 'state-line ' + (total ? band(percent, total) : 'none');
+    $('state-dot').setAttribute('data-state', status);
+    $('state-text').innerHTML = '<strong>' + esc(word) + '</strong>. ' + esc(detail);
+  }
+
+  function renderOverview(d) {
+    var total = Number(d.total || 0);
+    var percent = Number(d.uptimePercent || 0);
+    $('uptime').textContent = total ? pct(percent, 2) : '--';
+    $('total').textContent = total ? num(total) : '--';
+    $('failed').textContent = total ? num(d.failedRequests || d.failed) : '--';
+    $('window').textContent = d.window || ((d.retentionDays || 7) + ' days');
+    var generated = clock(d.generatedAt);
+    $('generated').textContent = generated ? 'updated ' + generated : 'updated just now';
+    $('footer-updated').textContent = generated ? 'updated ' + generated : 'updated just now';
+  }
+
+  function renderWeek() {
+    var track = $('track');
+    var note = $('week-state');
+    var legend = $('legend');
+    var hint = $('week-hint');
+    if (!state.days.length) {
+      track.innerHTML = '';
+      legend.hidden = true;
+      hint.hidden = true;
+      $('week-count').textContent = 'day by day';
+      note.hidden = false;
+      note.textContent = 'No data yet. The first day shows up within an hour of the first ' +
+        'request the router serves.';
+      closeDialog();
+      return;
+    }
+    note.hidden = true;
+    legend.hidden = false;
+    hint.hidden = false;
+    var withTraffic = state.days.filter(function (d) { return Number(d.total) > 0; }).length;
+    $('week-count').textContent = withTraffic + ' of ' + state.days.length + ' days with traffic';
+    track.innerHTML = state.days.map(function (day) {
+      var c = band(Number(day.uptimePercent || 0), Number(day.total || 0));
+      var open = isOpenDay(day.date);
+      var title = longDay(day.date) + ' \u00b7 ' + (day.total
+        ? pct(day.uptimePercent, 2) + ' uptime \u00b7 ' + num(day.total) + ' requests'
+        : 'no requests');
+      return '<button type="button" class="seg ' + c + '" data-day="' + esc(day.date) + '"' +
+        ' aria-haspopup="dialog" aria-expanded="' + (open ? 'true' : 'false') +
+        '" aria-controls="day-modal" title="' + esc(title) + '">' +
+          '<span class="seg-bar"></span>' +
+          '<span class="seg-cap">' +
+            '<span class="seg-day"><span class="seg-dow">' + esc(shortWeekday(day.date)) + '</span> ' +
+              '<span class="seg-dom">' + esc(dayOfMonth(day.date)) + '</span></span>' +
+            '<span class="seg-pct ' + c + '">' + (day.total ? pct(day.uptimePercent, 1) : '\u2014') + '</span>' +
+          '</span>' +
+        '</button>';
+    }).join('');
+    // An open dialog keeps up with the feed, or closes if what it was showing
+    // aged out of the window while it was open.
+    if (state.dialog) {
+      var ctx = state.dialog.kind === 'model' ? modelContext() : dayByDate(state.dialog.date);
+      if (ctx) renderDayModal(); else closeDialog();
+    }
+  }
+
+  // The dialog: the day's numbers, then its 24 hours as a second line. Each
+  // hour is a button; the selected one is also spelled out in the readout, so
+  // the line never has to be read by colour alone.
+  function countsText(day) {
+    if (!day || !day.total) return 'No requests on this day.';
+    return num(day.total) + ' requests \u00b7 ' + num(day.successfulRequests) + ' ok \u00b7 ' +
+      num(day.failedRequests) + ' failed \u00b7 ' + pct(day.uptimePercent, 2) + ' uptime';
+  }
+
+  function renderDayModal() {
+    var d = state.dialog;
+    if (!d) return;
+    var hours = dialogHours();
+    var date = d.date;
+    if (d.kind === 'model') {
+      var ctx = modelContext();
+      if (!ctx) return;
+      $('dd-title').textContent = d.model + ' via ' + d.provider;
+      $('dd-sub').textContent = longDay(date) + ' \u00b7 ' + countsText(ctx.day || { total: 0 });
+    } else {
+      var day = dayByDate(date);
+      if (!day) return;
+      $('dd-title').textContent = longDay(date);
+      $('dd-sub').textContent = countsText(day);
+    }
+
+    var segs = '';
+    var ticks = '';
+    var seen = 0;
+    for (var h = 0; h < 24; h++) {
+      var row = hours[h] || null;
+      var c = row ? band(Number(row.uptimePercent || 0), Number(row.total || 0)) : 'none';
+      var label = hourText(h, row);
+      if (row) seen++;
+      segs += '<button type="button" class="hseg ' + c + '" id="hour-' + h + '" data-hour="' + h + '"' +
+        ' aria-pressed="' + (state.hour === h ? 'true' : 'false') + '"' +
+        ' aria-label="' + esc(label) + '" title="' + esc(label) + '"' +
+        ' tabindex="' + (state.hour === h ? '0' : '-1') + '"><span class="hseg-bar"></span></button>';
+      ticks += '<span>' + (h % 3 === 0 ? pad(h) : '') + '</span>';
+    }
+    $('dd-hours').innerHTML = segs;
+    $('dd-ticks').innerHTML = ticks;
+
+    var picked = hours[state.hour] || null;
+    $('dd-readout').textContent = picked
+      ? pad(state.hour) + ':00 UTC \u00b7 ' + pct(picked.uptimePercent, 1) + ' uptime \u00b7 ' +
+        num(picked.successful) + ' of ' + num(picked.total) + ' requests succeeded'
+      : pad(state.hour) + ':00 UTC \u00b7 no requests in this hour';
+    $('dd-note').textContent = 'Every hour of ' + longDay(date) +
+      (d.kind === 'model' ? ' through ' + d.provider : '') + ', in UTC. ' +
+      (seen === 24
+        ? 'All 24 hours handled traffic. A request counts in the hour it finished, not the hour it started.'
+        : (24 - seen) + ' of 24 hours saw no requests; those blocks are hollow and the readout says so.');
+  }
+
+  // One model under a provider: its name, today's 24 hours as a line of blocks,
+  // and that day's numbers. A block opens the hour it stands for; the name
+  // opens the latest hour that had traffic. The week is not repeated here - the
+  // dialog is where a day gets read.
+  function modelRow(m, providerName) {
+    var days = Array.isArray(m.days) ? m.days : [];
+    var day = days.length ? days[days.length - 1] : null;
+    var hours = day ? (indexHours(m.hours)[day.date] || []) : [];
+    var blocks = '';
+    for (var h = 0; h < 24; h++) {
+      var row = hours[h] || null;
+      var c = row ? band(Number(row.uptimePercent || 0), Number(row.total || 0)) : 'none';
+      var label = esc(m.name) + ' \u00b7 ' + (day ? longDay(day.date) + ' \u00b7 ' : '') +
+        pad(h) + ':00 UTC \u00b7 ' + (row
+          ? pct(row.uptimePercent, 1) + ' uptime \u00b7 ' + num(row.total) +
+            (Number(row.total) === 1 ? ' request' : ' requests')
+          : 'no requests');
+      blocks += '<button type="button" class="mseg ' + c + '"' +
+        ' data-model="' + esc(m.name) + '" data-provider="' + esc(providerName) + '"' +
+        (day ? ' data-day="' + esc(day.date) + '"' : '') +
+        ' data-hour="' + h + '"' +
+        ' aria-label="' + label + '" title="' + label + '">' +
+        '<span class="mseg-bar"></span></button>';
+    }
+    var meta = day && day.total
+      ? shortWeekday(day.date) + ' \u00b7 ' + pct(day.uptimePercent, 1) + ' \u00b7 ' +
+        num(day.successfulRequests) + '/' + num(day.total)
+      : 'no requests today';
+    return '<div class="mrow">' +
+      '<button type="button" class="mrow-name" data-model="' + esc(m.name) + '"' +
+        ' data-provider="' + esc(providerName) + '" title="Open the hours behind ' + esc(m.name) +
+        '">' + esc(m.name) + '</button>' +
+      '<span class="mrow-line" role="group" aria-label="Hours for ' + esc(m.name) +
+        (day ? ' on ' + esc(longDay(day.date)) : '') + '">' + blocks + '</span>' +
+      '<span class="mrow-meta">' + meta + '</span>' +
+    '</div>';
+  }
+
+  function renderProviders(rows) {
+    var el = $('providers');
+    var distinct = {};
+    rows.forEach(function (p) {
+      (Array.isArray(p.modelStats) ? p.modelStats : []).forEach(function (m) { distinct[m.name] = true; });
+    });
+    var modelCount = Object.keys(distinct).length;
+    $('provider-count').textContent = rows.length
+      ? rows.length + (rows.length === 1 ? ' provider' : ' providers') +
+        (modelCount ? ' \u00b7 ' + modelCount + (modelCount === 1 ? ' model' : ' models') : '')
+      : 'none yet';
+    if (!rows.length) {
+      el.innerHTML = '<p class="empty">No traffic yet. Providers appear here once the router ' +
+        'serves a request, and each one keeps the last 7 days.</p>';
+      return;
+    }
+    el.innerHTML = rows.map(function (p) {
+      var c = band(Number(p.uptimePercent || 0), Number(p.total || 0));
+      var models = Array.isArray(p.modelStats) ? p.modelStats : [];
+      var key = 'P:' + p.name;
+      var summary = '<span class="acc-main">' +
+          '<span class="acc-name">' + esc(p.name) + '</span>' +
+          '<span class="acc-sub">' + (p.total
+            ? num(p.total) + ' requests \u00b7 ' + models.length + (models.length === 1 ? ' model' : ' models')
+            : 'no requests in the window') + '</span>' +
+        '</span>' +
+        '<span class="acc-right">' +
+          '<span class="acc-pct ' + c + '">' + (p.total ? pct(p.uptimePercent, 1) : '\u2014') + '</span>' +
+          '<span class="chev" aria-hidden="true">' + CHEV + '</span>' +
+        '</span>';
+      var body = models.length
+        ? '<div class="rows">' + models.map(function (m) { return modelRow(m, p.name); }).join('') + '</div>'
+        : '<p class="empty">This provider has requests recorded, but none of them carried a model id.</p>';
+      return '<details class="acc" data-key="' + esc(key) + '"' + (state.open[key] ? ' open' : '') + '>' +
+        '<summary>' + summary + '</summary>' +
+        '<div class="acc-body">' + body + '</div>' +
+      '</details>';
+    }).join('');
+  }
+
+
+  /* --------------------------------------------------------------- controls */
+  // <details> fires `toggle`, which does not bubble, so it is caught in the
+  // capture phase on the container. The open keys survive the next render.
+  function rememberOpen(id) {
+    $(id).addEventListener('toggle', function (e) {
+      var el = e.target;
+      if (!el || !el.getAttribute) return;
+      var key = el.getAttribute('data-key');
+      if (!key) return;
+      if (el.open) state.open[key] = true; else delete state.open[key];
+    }, true);
+  }
+
+  // The element to hand focus back to when the dialog closes.
+  var lastFocus = null;
+
+  // One dialog serves both readings: a day of the whole router, or one model's
+  // day through one provider. The caller says which and what day.
+  function openDialog(dialog, hours, hour) {
+    state.dialog = dialog;
+    state.hour = (typeof hour === 'number' && hour >= 0 && hour <= 23) ? hour : lastHourWithTraffic(hours);
+    lastFocus = document.activeElement || null;
+    renderWeek();
+    $('day-modal').classList.add('open');
+    $('day-modal').setAttribute('aria-hidden', 'false');
+    $('dd-close').focus();
+  }
+
+  function closeDialog() {
+    if (!state.dialog) return;
+    state.dialog = null;
+    $('day-modal').classList.remove('open');
+    $('day-modal').setAttribute('aria-hidden', 'true');
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+  }
+
+  function selectHour(h, moveFocus) {
+    if (!state.dialog) return;
+    state.hour = Math.max(0, Math.min(23, h));
+    renderDayModal();
+    if (moveFocus) {
+      var el = document.getElementById('hour-' + state.hour);
+      if (el && el.focus) el.focus();
+    }
+  }
+
+  $('track').addEventListener('click', function (e) {
+    var seg = e.target.closest ? e.target.closest('.seg') : null;
+    if (!seg) return;
+    var date = seg.getAttribute('data-day');
+    if (dayByDate(date)) openDialog({ kind: 'day', date: date }, hoursOf(date));
+  });
+
+  // A model's day blocks and its name both live in the provider list, so one
+  // listener covers the whole table.
+  $('providers').addEventListener('click', function (e) {
+    if (!e.target.closest) return;
+    var block = e.target.closest('.mseg');
+    var name = block ? null : e.target.closest('.mrow-name');
+    var el = block || name;
+    if (!el) return;
+    var provider = el.getAttribute('data-provider');
+    var model = el.getAttribute('data-model');
+    var ctx = providerByName(provider);
+    var entries = ctx && Array.isArray(ctx.modelStats) ? ctx.modelStats : [];
+    var entry = null;
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].name === model) entry = entries[i];
+    }
+    if (!entry) return;
+    var days = Array.isArray(entry.days) ? entry.days : [];
+    // A block opens its own hour of the model's most recent day; the name opens
+    // that same day on its latest hour with traffic.
+    var date = block ? block.getAttribute('data-day') : (days.length ? days[days.length - 1].date : null);
+    if (!date) return;
+    var hours = indexHours(entry.hours)[date] || [];
+    var hour = block ? Number(block.getAttribute('data-hour')) : null;
+    openDialog({ kind: 'model', date: date, provider: provider, model: model }, hours, hour);
+  });
+
+  $('dd-hours').addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('.hseg') : null;
+    if (btn) selectHour(Number(btn.getAttribute('data-hour')), false);
+  });
+  // The hour line is one widget: arrows walk it, so 24 hours are not 24 tab
+  // stops between the dialog head and the close button.
+  $('dd-hours').addEventListener('keydown', function (e) {
+    var step = (e.key === 'ArrowLeft' || e.key === 'ArrowUp') ? -1
+      : (e.key === 'ArrowRight' || e.key === 'ArrowDown') ? 1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    selectHour(state.hour + step, true);
+  });
+  $('dd-close').addEventListener('click', closeDialog);
+  $('day-modal').addEventListener('click', function (e) {
+    if (e.target === $('day-modal')) closeDialog();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && state.dialog) {
+      e.preventDefault();
+      closeDialog();
+    }
+  });
+
+  /* ------------------------------------------------------------------ fetch */
+  function fail(message) {
+    closeDialog();
+    $('live').classList.add('off');
+    $('live-label').textContent = 'error';
+    var line = $('state-line');
+    line.className = 'state-line error';
+    $('state-text').innerHTML = '<strong>Status feed unreachable</strong>. ' +
+      esc(message) + ' The page retries every 30 seconds.';
+    $('error-detail').textContent = message;
+    $('feed-error').hidden = false;
+    ['overview', 'week', 'breakdown'].forEach(function (id) { $(id).hidden = true; });
+  }
+
+  function load() {
+    var started = Date.now();
+    return fetch('/v1/status', { headers: { Accept: 'application/json' } })
+      .then(function (r) {
+        if (!r.ok) throw new Error('GET /v1/status answered ' + r.status);
+        return r.json();
+      })
+      .then(function (d) {
+        $('feed-error').hidden = true;
+        ['overview', 'week', 'breakdown'].forEach(function (id) { $(id).hidden = false; });
+        $('live').classList.remove('off');
+        $('live-label').textContent = 'live';
+        render(d);
+      })
+      .catch(function (err) {
+        fail((err && err.message) || 'the request failed');
+      });
+  }
+
+  rememberOpen('providers');
+  $('retry').addEventListener('click', load);
+  load();
+  setInterval(load, 30000);
+})();
+</script>
+</body>
+</html>

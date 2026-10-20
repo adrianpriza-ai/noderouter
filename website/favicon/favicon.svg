@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-100 -100 200 200" width="400" height="400">
+  <!-- The tab icon: same mark as tinypixel.svg, on a padded viewBox so the
+       arms don't touch the tab edge at 16px. The mark follows the color
+       scheme — black on light, white on dark — matching the site theme. -->
+  <style>
+    .mark { fill: #000000; }
+    @media (prefers-color-scheme: dark) { .mark { fill: #ffffff; } }
+  </style>
+  <g class="mark">
+    <!-- Central diamond (square rotated 45°) -->
+    <rect x="-40" y="-40" width="80" height="80" rx="4" ry="4" transform="rotate(45)" />
+
+    <!-- Top-right extension -->
+    <rect x="-40" y="-12" width="80" height="24" rx="4" ry="4" transform="translate(46, 46) rotate(135)" />
+
+    <!-- Bottom-right extension -->
+    <rect x="-40" y="-12" width="80" height="24" rx="4" ry="4" transform="translate(46, -46) rotate(-135)" />
+
+    <!-- Bottom-left extension -->
+    <rect x="-40" y="-12" width="80" height="24" rx="4" ry="4" transform="translate(-46, -46) rotate(-45)" />
+
+    <!-- Top-left extension -->
+    <rect x="-40" y="-12" width="80" height="24" rx="4" ry="4" transform="translate(-46, 46) rotate(45)" />
+  </g>
+</svg>

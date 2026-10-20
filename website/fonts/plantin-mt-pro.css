@@ -1,0 +1,51 @@
+/* Plantin Now Variable (self-hosted)
+ * Licensed webfont files in this directory (see plantin-now-variable-license.txt).
+ */
+
+@font-face {
+  font-family: 'PlantinNow';
+  src:
+    url('PlantinNowVariable-Upright.woff2') format('woff2-variations'),
+    url('PlantinNowVariable-Upright.woff2') format('woff2');
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'PlantinNow';
+  src:
+    url('PlantinNowVariable-Italic.woff2') format('woff2-variations'),
+    url('PlantinNowVariable-Italic.woff2') format('woff2');
+  font-weight: 200 800;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Plantin MT Pro';
+  src:
+    url('PlantinNowVariable-Upright.woff2') format('woff2-variations'),
+    url('PlantinNowVariable-Upright.woff2') format('woff2'),
+    local('Plantin MT Pro'),
+    local('PlantinMTPro-Regular'),
+    local('Plantin MT Std'),
+    local('PlantinMTStd-Regular');
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Plantin MT Pro';
+  src:
+    url('PlantinNowVariable-Italic.woff2') format('woff2-variations'),
+    url('PlantinNowVariable-Italic.woff2') format('woff2'),
+    local('Plantin MT Pro Italic'),
+    local('PlantinMTPro-Italic'),
+    local('Plantin MT Std Italic'),
+    local('PlantinMTStd-Italic');
+  font-weight: 200 800;
+  font-style: italic;
+  font-display: swap;
+}

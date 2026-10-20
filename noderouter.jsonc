@@ -1,0 +1,381 @@
+{
+  // ── Server ────────────────────────────────────────────────────────────────
+  // How the router itself listens and how much it will buffer.
+  "server": {
+    "host": "127.0.0.1",        // bind address; use 0.0.0.0 to accept external connections
+    "port": 32256,              // listen port (deliberately uncommon to avoid collisions)
+    "allowedHosts": [],         // extra hostnames to answer forwarded requests for, besides loopback and host (stops DNS rebinding); declare a front-proxy public name here
+    "maxBodyMb": 64,            // max request body size in MB; the whole body is buffered for retry replay
+    "requestTimeoutSecs": 900,  // upstream timeout per attempt (15 min)
+    "memoryLimitMb": 100,       // soft GC ceiling (GOMEMLIMIT); never refuses work, only nudges the collector
+    "bodyBudgetMb": 33          // hard cap on total buffered body bytes in flight; 503 when exceeded
+  },
+
+  // ── Proxy pool ────────────────────────────────────────────────────────────
+  // Rotating upstream proxies: fetch, test, and route requests through them.
+  "proxy": {
+    "enabled": true,   // master switch for the entire proxy pool
+    "mode": "rotate",  // selection strategy: "rotate" | "first" | "random"
+    "sources": [       // proxy list sources to scrape
+      "proxyscrape",
+      "geonode",
+      "freeproxydb",
+      "chillyproxy",
+      "iplocate",
+      "roundproxies",
+      "private"        // your own proxies from proxy.privateFile
+    ],
+    "protocol": "all",                  // filter by protocol: "http" | "https" | "all"
+    "maxTimeoutMs": 10000,              // ProxyScrape response-time filter (ms)
+    "limit": 200,                       // max proxies to fetch per source
+    "file": "~/.noderouter/ports.txt",  // on-disk proxy list (one host:port per line)
+    "privateFile": "~/.noderouter/ports-private.txt",  // your own proxies; add "private" to sources
+    "refresh": "0 0 * * *",             // cron schedule for auto-refresh (default: midnight daily)
+    "watchSeconds": 30,                 // poll the file for changes every N seconds (0 = disabled)
+    "maxAttempts": 3,                   // legacy alias for retry.maxAttempts; still honoured
+    "test": {
+      "enabled": true,    // test proxies before saving them
+      "workers": 50,      // concurrent test workers
+      "timeoutMs": 2000,  // per-proxy test timeout
+      "urls": [           // endpoints to verify proxy connectivity
+        "https://api.ipify.org?format=json",
+        "https://icanhazip.com"
+      ],
+      "keep": 0,                    // keep only the N fastest proxies (0 = keep all that passed)
+      "insecureSkipVerify": false,  // also keep proxies that intercept TLS (MITM)
+      "reValidateAfter": "6h"       // how long a successful check stays valid (Go duration string)
+    }
+  },
+
+  // ── Status history ───────────────────────────────────────────────────────
+  // The request outcomes behind /status and /v1/status, kept on disk so a
+  // restart (an update, a config edit, a crash a supervisor restarts) keeps the
+  // window instead of starting it over. Nothing sensitive is in it: counts of
+  // requests per hour, per model and per provider, pruned to the 7-day window
+  // on every save. Deleting the file resets the history.
+  "status": {
+    "enabled": true,                        // false = keep the history in RAM only (as before)
+    "file": "~/.noderouter/status.json",    // where the history lives
+    "saveSeconds": 30                       // rewrite interval; negative = only at shutdown
+  },
+
+  // ── Endpoint health ──────────────────────────────────────────────────────
+  // What happens to an upstream endpoint (options.baseURLs) that stops
+  // answering: it is benched out of the pool, and probed back in when it
+  // returns. Only applies to providers with an endpoint pool.
+  "endpoints": {
+    "failThreshold": 3,  // consecutive failures before an endpoint is benched (negative = never bench)
+    "benchSecs": 60,     // how long a benched endpoint stays out
+    "recheckSecs": 60    // how often benched endpoints are probed (negative = no probes)
+  },
+
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  // Client keys for the router's own endpoints. All optional: with neither
+  // token nor apiKeys set, no key is checked, so any bearer - or none - works.
+  "auth": {
+    "apiKeys": [],     // client keys: array, "sk-a sk-b" string, or "file:~/.noderouter/client-keys.txt" (`noderouter keygen` writes that file)
+    "token": "",       // single-key spelling of apiKeys (accepted as X-Noderouter-Token, Bearer or x-api-key)
+    "adminToken": ""   // required on /noderouter/* (apiKeys work there too); generated at startup when unset
+  },
+
+  // ── Routing ───────────────────────────────────────────────────────────────
+  // Default provider for requests that name an unknown model.
+  "routing": {
+    "defaultProvider": "Zen"  // provider to use when a model id is not recognised
+  },
+
+  // ── Routes ────────────────────────────────────────────────────────────────
+  // Explicit model-to-provider mappings that override automatic resolution.
+  // Format: "<model-id>": "<provider-name>"
+  "routes": {
+    "space-bunny": "Zen"
+  },
+
+  // ── Providers ─────────────────────────────────────────────────────────────
+  // Each provider is an upstream API endpoint with its own auth, models, and options.
+  "provider": {
+
+    // ── Zen (OpenCode) ──────────────────────────────────────────────────────
+    "Zen": {
+      "id": "zen",                // short alias used in "<alias>/<model>" namespaced lookups
+      "aliases": ["opencode"],    // additional names that resolve to this provider
+      "options": {
+        "baseURL": "https://opencode.ai/zen/v1",  // upstream API root
+        "re-proxy": true,                         // route through the proxy pool (false = direct connection)
+        "apiKey": "",                             // single key, "file:/path", or "" for keyless (client's auth passes through)
+        "apiKeys": [],                            // key pool: array, space-separated string, or "file:/path"
+        "headers": {},                            // extra headers on every upstream request
+        "userAgent": "",                          // User-Agent sent upstream; empty forwards the client's (some providers want a browser-shaped one)
+        "timeoutSecs": 300,                       // per-provider upstream timeout
+        "insecureSkipVerify": false               // skip TLS verification on the upstream hop
+      },
+      "models": {
+        "space-bunny-free": {
+          "name": "Space Bunny",
+          "limit": { "context": 1000000, "output": 128000 },
+          "description": "An LLM model from Minimax",
+          "modalities": { "input": ["text"], "output": ["text"] }
+        },
+        "nemotron-3.5-lightning-free": {
+          "name": "Nemotron 3.5 Lightning",
+          "limit": { "context": 1000000, "output": 128000 },
+          "description": "A LLM model from Nvidia",
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        }
+      }
+    },
+
+    // ── LLM Provider (Minimax) ──────────────────────────────────────────────
+    "LLM Povider": {
+      "id": "llm",
+      "aliases": [],
+      "options": {
+        "baseURL": "http://example.com/v1",
+        "re-proxy": true,
+        "apiKeys": "sk-...91 sk-...92",  // space-separated key pool (also accepts array or "file:/path")
+        "keyStrategy": "rotate",   // key selection: "rotate" | "first" | "random"
+        // "baseURLs": ["http://mirror-a/v1", "http://mirror-b/v1"],  // endpoint pool: same forms as apiKeys, wins over baseURL
+        // "endpointStrategy": "rotate",  // endpoint selection: "rotate" | "primary" | "first" | "random"
+        "headers": { "X-Tenant": "lab" },
+        "timeoutSecs": 300,
+        "insecureSkipVerify": false
+      },
+      "models": {
+        "minimax-m2.7": {
+          "name": "LLM/Minimax M2.7",
+          "upstreamName": "minimax-m2.7-preview",  // override the id sent to the provider
+          "limit": { "context": 180000, "output": 64000 },
+          "description": "An LLM model from Minimax",
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "minimax-m3": {
+          "name": "LLM/Minimax M3",
+          "as": "llm-mini-m3",      // rename the advertised model id
+          "limit": { "context": 1000000, "output": 128000 },
+          "description": "An LLM model from Minimax",
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        }
+      }
+    },
+
+    // ── Image Generation and Editing ─────────────────────────────────────────
+    // Provider for text-to-image / diffusion models.
+    // "kind": "image" routes generation requests to /v1/images/generations.
+    // Add "image_edit" to "kinds" when the same model also accepts multipart
+    // image edits at /v1/images/edits. Use "kind": "image_edit" for an
+    // edit-only model.
+    "ImageGen": {
+      "id": "imagegen",
+      "aliases": ["img", "dalle"],
+      "options": {
+        "baseURL": "https://api.example.com/v1",
+        "re-proxy": true,
+        "apiKey": "",
+        "apiKeys": [],
+        "headers": {},
+        "timeoutSecs": 120,
+        "insecureSkipVerify": false
+      },
+      "models": {
+        "flux-schnell": {
+          "name": "FLUX.1 Schnell",
+          "kind": "image",          // model kind: "image" routes to /v1/images/generations
+          "limit": { "context": 0, "output": 0 },
+          "description": "Fast text-to-image model by Black Forest Labs",
+          "modalities": { "input": ["text"], "output": ["image"] }
+        },
+        "sdxl-turbo": {
+          "name": "SDXL Turbo",
+          "kind": "image",
+          "limit": { "context": 0, "output": 0 },
+          "description": "Real-time image generation by Stability AI",
+          "modalities": { "input": ["text"], "output": ["image"] }
+        },
+        "flux-edit": {
+          "name": "FLUX.1 Edit",
+          "kind": "image",
+          "kinds": ["image_edit"],
+          "limit": { "context": 0, "output": 0 },
+          "description": "Image generation and editing model",
+          "modalities": { "input": ["text", "image"], "output": ["image"] }
+        }
+      }
+    },
+
+    // ── Video Generation ────────────────────────────────────────────────────
+    // Provider for text-to-video / image-to-video models.
+    // The "kind": "video" field classifies the model; requests go to /v1/videos/generations.
+    // A video model opens the larger media body ceiling from its kind alone,
+    // because a clip is the payload, base64 encoded and megabytes of it.
+    "VideoGen": {
+      "id": "videogen",
+      "aliases": ["video", "veo"],
+      "options": {
+        "baseURL": "https://api.example.com/v1",
+        "re-proxy": true,
+        "apiKey": "",
+        "apiKeys": [],
+        "headers": {},
+        "timeoutSecs": 600,   // a rendered clip takes minutes, not seconds
+        "insecureSkipVerify": false
+      },
+      "models": {
+        "veo-3.1-generate": {
+          "name": "Veo 3.1",
+          "kind": "video",          // model kind: "video" routes to /v1/videos/generations
+          "limit": { "context": 0, "output": 0 },
+          "description": "Text-to-video model by Google DeepMind, with native audio",
+          "modalities": { "input": ["text"], "output": ["video"] }
+        },
+        "kling-v2.5-turbo": {
+          "name": "Kling 2.5 Turbo",
+          // No "kind" here: a model that outputs video is a video model on its
+          // own, the way one that outputs images is an image model.
+          "limit": { "context": 0, "output": 0 },
+          "description": "Image-to-video model by Kuaishou, fast enough to preview with",
+          "modalities": { "input": ["text", "image"], "output": ["video"] }
+        }
+      }
+    },
+
+    // ── Speech (TTS & STT / Whisper) ────────────────────────────────────
+    // Provider for text-to-speech and speech-to-text (whisper) models.
+    // "kind": "tts" answers at /v1/audio/speech; "kind": "stt" answers at
+    // /v1/audio/transcriptions. A transcription upload is multipart/form-
+    // data (curl -F file=@audio.mp3 -F model=whisper-1): the router reads
+    // the model id out of the form field, so routing and upstream renames
+    // work on uploads the same as on JSON bodies. An stt model opens the
+    // larger media body ceiling from its kind alone - minutes of audio are
+    // the payload.
+    "Speech": {
+      "id": "speech",
+      "aliases": ["tts", "whisper"],
+      "options": {
+        "baseURL": "https://api.example.com/v1",
+        "re-proxy": false,
+        "apiKey": "",
+        "apiKeys": [],
+        "headers": {},
+        "timeoutSecs": 300,   // long recordings take a while to transcribe
+        "insecureSkipVerify": false
+      },
+      "models": {
+        "gpt-4o-mini-tts": {
+          "name": "GPT-4o mini TTS",
+          "kind": "tts",            // model kind: "tts" routes to /v1/audio/speech
+          "limit": { "context": 0, "output": 0 },
+          "description": "Text-to-speech model from OpenAI, six voices plus instruction following",
+          "modalities": { "input": ["text"], "output": ["audio"] }
+        },
+        "whisper-1": {
+          "name": "Whisper",
+          "kind": "stt",            // model kind: "stt" routes to /v1/audio/transcriptions
+          // The limit mirrors the 30-minute / 25MB upload ceiling of the
+          // transcription API; transcripts are text, not token-capped.
+          "limit": { "context": 0, "output": 0 },
+          "description": "General-purpose speech-to-text model from OpenAI",
+          "modalities": { "input": ["audio", "file"], "output": ["text"] }
+        }
+      }
+    },
+
+    // ── Embeddings ──────────────────────────────────────────────────────────
+    // Provider for embedding models: text in, vectors out at /v1/embeddings.
+    // The "kind": "embedding" field classifies the model, the same way image
+    // and video classify theirs.
+    "Embeddings": {
+      "id": "embed",
+      "aliases": ["emb", "vector"],
+      "options": {
+        "baseURL": "https://api.example.com/v1",
+        "re-proxy": false,
+        "apiKey": "",
+        "apiKeys": [],
+        "headers": {},
+        "timeoutSecs": 60,
+        "insecureSkipVerify": false
+      },
+      "models": {
+        "text-embedding-3-large": {
+          "name": "Text Embedding 3 Large",
+          "kind": "embedding",     // model kind: "embedding" routes to /v1/embeddings
+          // 8,191 tokens of input. The vector dimension is not a token cap, so
+          // there is no output limit to declare.
+          "limit": { "context": 8191, "output": 0 },
+          "description": "Embedding model from OpenAI",
+          "modalities": { "input": ["text"], "output": ["text"] }
+        },
+        "embed-v4.0": {
+          "name": "Embed v4.0",
+          "kind": "embedding",
+          "limit": { "context": 128000, "output": 0 },
+          "description": "Multimodal embedding model from Cohere",
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        }
+      }
+    },
+
+    // ── System One (Typesafe) ──────────────────────────────────────────────
+    // Provider for System One models that return typed decisions at /v1/systemone.
+    // "kind": "systemone" classifies the model for the typesafe decision API.
+    "SystemOne": {
+      "id": "systemone",
+      "aliases": ["s1", "decision"],
+      "options": {
+        "baseURL": "https://api.example.com/v1",
+        "re-proxy": true,
+        "apiKey": "",
+        "apiKeys": [],
+        "headers": {},
+        "timeoutSecs": 60,
+        "insecureSkipVerify": false
+      },
+      "models": {
+        "decision-engine": {
+          "name": "Decision Engine",
+          "kind": "systemone",      // model kind: "systemone" routes to /v1/systemone
+          "limit": { "context": 200000, "output": 32000 },
+          "description": "A typesafe decision-making model that returns structured outputs",
+          "modalities": { "input": ["text"], "output": ["text"] }
+        }
+      }
+    },
+
+    // ── Mistral (OCR & Moderation) ─────────────────────────────────────────
+    // Provider for OCR and content moderation models.
+    // "kind": "ocr" routes to /v1/ocr; "kind": "moderation" routes to /v1/moderations.
+    // Note: /v1/ocr is currently only known to work with Mistral. /v1/moderations
+    // also works with OpenAI (same path, same request shape).
+    "Mistral": {
+      "id": "mistral",
+      "aliases": ["mistral"],
+      "options": {
+        "baseURL": "https://api.mistral.ai/v1",
+        "re-proxy": false,
+        "apiKey": ""
+      },
+      "models": {
+        "mistral-ocr-latest": {
+          "name": "Mistral OCR Latest",
+          "kind": "ocr",            // model kind: "ocr" routes to /v1/ocr
+          // mistral-ocr-latest is OCR 4.1: 16,384 tokens of context per page,
+          // 4,096 tokens of markdown out. The input modalities matter beyond
+          // the site: they are what opens the larger body ceiling, so a
+          // base64 PDF is not refused at maxBodyMb.
+          "limit": { "context": 16384, "output": 4096 },
+          "description": "OCR model from Mistral for document parsing",
+          "modalities": { "input": ["image", "file"], "output": ["text"] }
+        },
+        "mistral-moderation-latest": {
+          "name": "Mistral Moderation Latest",
+          "kind": "moderation",     // model kind: "moderation" routes to /v1/moderations
+          // 128k of input (Mistral Moderation 2); it returns category scores,
+          // so there is no output cap to declare.
+          "limit": { "context": 131072, "output": 0 },
+          "description": "Content moderation model from Mistral",
+          "modalities": { "input": ["text"], "output": ["text"] }
+        }
+      }
+    }
+  }
+}

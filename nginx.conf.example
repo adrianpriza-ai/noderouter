@@ -1,0 +1,106 @@
+# noderouter behind nginx.
+#
+# The router should stay on 127.0.0.1 and let nginx be the only thing exposed
+# to the network: nginx terminates TLS, and the router keeps its API key to
+# itself. Start the router with its default host and put this in front:
+#
+#   noderouter serve            # listens on 127.0.0.1:32256
+#   sudo ln -s "$PWD/nginx.conf.example" /etc/nginx/conf.d/noderouter.conf
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# Then point clients at https://llm.example.com/v1.
+#
+# Every directive below that changes from the nginx default is there for a
+# reason involving LLM traffic specifically; the comments say which.
+
+upstream noderouter {
+    server 127.0.0.1:32256;
+    keepalive 32;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name llm.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name llm.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/llm.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/llm.example.com/privkey.pem;
+
+    # --- streaming -------------------------------------------------------
+    # Without this nginx buffers the whole response and a streamed completion
+    # arrives in one lump at the end, or not at all until the model finishes.
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_request_buffering off;
+
+    # Long completions: the default 60s read timeout cuts a slow model off
+    # mid-answer. Ten minutes is comfortably past any sane completion.
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+    proxy_connect_timeout 10s;
+
+    # Required for keepalive to the upstream, and for streaming.
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+
+    # The router appends its own hop to these, so pass the chain along intact
+    # and the provider sees the real client, not nginx.
+    # $host is the name the router must be told to answer for: it refuses
+    # forwarded requests for any host outside loopback, server.host and
+    # server.allowedHosts (see docs/configuration.md), so llm.example.com
+    # goes in that list.
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host  $host;
+
+    # --- request bodies --------------------------------------------------
+    # nginx rejects anything over 1MB by default, which silently breaks image
+    # and long-context requests. Keep this at or above the router's
+    # server.maxBodyMb (64).
+    client_max_body_size 64m;
+    client_body_timeout  300s;
+
+    # --- access control --------------------------------------------------
+    # The router speaks no TLS and will happily spend the provider's key for
+    # anyone who reaches it. Pick one:
+    #
+    # 1. a shared token, checked here or by the router's auth.token:
+    #      if ($http_authorization != "Bearer $router_token") {
+    #          return 401;
+    #      }
+    # 2. an ip allowlist, if the clients are on a known network:
+    #      allow 10.0.0.0/8;
+    #      allow 192.168.1.0/24;
+    #      deny all;
+    #
+    # Leaving both off means anyone who can reach this port can use the key.
+    limit_req zone=llm burst=20 nodelay;
+
+    location / {
+        proxy_pass http://noderouter;
+    }
+}
+
+# The router's own status endpoints, kept off the public path so the pool
+# contents and counters are not readable from the internet.
+location = /noderouter/status {
+    allow 127.0.0.1;
+    allow 10.0.0.0/8;
+    deny all;
+    proxy_pass http://noderouter;
+}
+
+# Rate-limit zones go in the http block, so this belongs in nginx.conf rather
+# than inside a server:
+#
+#   limit_req_zone $binary_remote_addr zone=llm:10m rate=10r/s;

